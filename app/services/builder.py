@@ -115,9 +115,6 @@ def run_build_pipeline(db: Session, job_id: str, stack: str, dbtype: str, queue:
             base_branch = os.getenv("GITHUB_BASE_BRANCH", "main")
             branch_name = f"ai/{job.job_id}"
 
-            print(f"[builder] copying generated files into repo: {repo_path}")
-            copy_tree(generated_dir, repo_path)
-
             print("[builder] configuring git")
             ensure_git_identity(repo_path)
             set_authenticated_remote(repo_path)
@@ -128,12 +125,15 @@ def run_build_pipeline(db: Session, job_id: str, stack: str, dbtype: str, queue:
             print(f"[builder] creating branch: {branch_name}")
             create_branch(repo_path, branch_name)
 
+            print(f"[builder] copying generated files into repo: {repo_path}")
+            copy_tree(generated_dir, repo_path)
+
             print(f"[builder] committing and pushing branch: {branch_name}")
             push_result = add_commit_push(
                 repo_path=repo_path,
                 commit_message=f"AI-generated compliance engine scaffold for job {job.job_id}",
                 branch_name=branch_name,
-            )
+)
 
             if push_result == "no_changes":
                 print("[builder] no git changes detected; skipping PR creation")

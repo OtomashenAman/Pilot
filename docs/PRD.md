@@ -1,49 +1,59 @@
-# Subcontractor Onboarding PRD (EOR/AOR)
+# EOR/AOR Subcontractor Onboarding Platform - PRD
 
-## 1. Context
-EOR/AOR platforms require compliant, auditable onboarding of subcontractors across jurisdictions. System must enforce deterministic eligibility rules with immutable audit trails.
+## 1. Objective
+Automate subcontractor eligibility determination for Employer/Agent of Record services with 100% auditability and deterministic compliance logic.
 
 ## 2. Core Requirements
 
 ### 2.1 Deterministic Rule Engine
-- DSL for compliance rules (tax residency, visa status, background checks)
-- Rule execution must be pure functions: same inputs = same outputs
-- Support boolean logic, date comparisons, entity lookups
-- Execution context isolation per evaluation
+- JSON-based logical operators (AND/OR/NOT/IN/COMPARE) only
+- No ML or probabilistic scoring
+- Same input payload must produce identical output across time
+- Execution trace capture for every node evaluation
 
 ### 2.2 Rule Versioning
-- Semantic versioning for rule sets (v1.0.0, v1.1.0)
-- Immutable rule snapshots (content-addressable storage)
-- A/B testing capability for rule rollouts
-- Rollback to previous versions within 24h
+- Immutable rule artifacts (WORM - Write Once Read Many)
+- Semantic versioning (major.minor.patch)
+- Effective date ranges for rule applicability
+- Automatic rollback capabilities for jurisdiction law changes
+- Version diff visualization for compliance officers
 
 ### 2.3 Decision Ledger
-- Append-only log of all eligibility decisions
-- Cryptographic chaining (hash of previous decision)
-- Tamper-evident storage
-- Decision ID, timestamp, rule version, inputs hash, output, confidence score
+- Append-only cryptographic log of all eligibility determinations
+- Tamper-evident hashing (previous decision hash included in current record)
+- Immutable storage with 7-year retention minimum
+- Exportable audit trails (JSON/CSV) for regulatory review
 
 ### 2.4 Evidence Citations
-- Every decision must cite supporting evidence (doc IDs, API responses)
-- Evidence integrity verification (checksums)
-- Retention policies per jurisdiction (7 years default)
-- Evidence binding to specific decision IDs
+- Auto-linking of source documents to specific rule nodes
+- Document integrity verification (SHA-256 hashes)
+- Source attribution (e.g., "Tax Form W-9 v2023, Line 3")
+- Missing evidence blocking rules from evaluation
 
 ## 3. User Flows
-1. Subcontractor submits application
-2. System executes rule set against profile + documents
-3. Async verification via Celery tasks (background checks, API validations)
-4. Decision written to ledger with evidence citations
-5. Human reviewer override capability (with mandatory justification)
 
-## 4. Compliance
-- GDPR/CCPA data handling
-- SOC2 Type II audit requirements
-- Immutable audit trails (WORM storage)
-- Right to explanation (decision reasoning)
+### Subcontractor Onboarding
+1. Identity verification (KYC) via Celery async task
+2. Document upload (Contracts, Tax forms, Certifications)
+3. Jurisdiction detection (auto or manual)
+4. Rule engine evaluation with real-time feedback
+5. Decision generation with cited evidence
+6. Appeal workflow for rejected determinations
 
-## 5. Success Metrics
-- Decision latency <500ms (sync rules)
-- 100% audit trail coverage
-- Zero rule versioning conflicts
-- Evidence retrieval <200ms
+### Compliance Officer
+1. Rule authoring via JSON DSL or UI builder
+2. Version testing against historical cases
+3. Activation/deactivation of rule sets by jurisdiction
+4. Audit query interface (search by subcontractor, date, rule version)
+
+## 4. Data Requirements
+- Subcontractor PII (encrypted at rest)
+- Jurisdiction-specific labor laws (200+ countries/states)
+- Document templates and validation schemas
+- Audit logs (immutable, partitioned by month)
+
+## 5. Non-Functional Requirements
+- Latency: <500ms for rule evaluation (p95)
+- Availability: 99.9% (compliance critical)
+- Audit query: <2s for 1M decision records
+- Compliance: SOC2 Type II, GDPR, CCPA
