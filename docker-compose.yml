@@ -1,0 +1,27 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: comp
+      POSTGRES_PASSWORD: comp
+      POSTGRES_DB: ai_builder
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  api:
+    build: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://comp:comp@postgres:5432/ai_builder
+    ports:
+      - "8011:8011"
+    depends_on:
+      - postgres
+    volumes:
+      - ./generated:/app/generated
+
+volumes:
+  pgdata:
