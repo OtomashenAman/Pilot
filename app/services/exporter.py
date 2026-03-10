@@ -2,7 +2,7 @@ import os
 from typing import Any
 
 
-def write_prd_files(prd_pack: dict[str, Any], base_dir: str = "./generated") -> list[str]:
+def write_prd_files(prd_pack: dict[str, Any], base_dir: str = "/app/generated") -> list[str]:
     written = []
 
     for file in prd_pack.get("files", []):
@@ -21,17 +21,6 @@ def write_prd_files(prd_pack: dict[str, Any], base_dir: str = "./generated") -> 
 
 
 def extract_added_file_content(diff_text: str) -> str:
-    """
-    Handles Codex-style 'Add File' patches like:
-
-    *** Begin Patch
-    *** Add File: path/to/file.py
-    +line1
-    +line2
-    *** End Patch
-
-    Returns the file content with leading '+' removed.
-    """
     lines = diff_text.splitlines()
     output_lines = []
 
@@ -56,7 +45,7 @@ def extract_added_file_content(diff_text: str) -> str:
     return "\n".join(output_lines).rstrip() + "\n"
 
 
-def write_codex_diffs(codex_diffs: dict[str, Any], base_dir: str = "./generated") -> list[str]:
+def write_codex_diffs(codex_diffs: dict[str, Any], base_dir: str = "/app/generated") -> list[str]:
     written = []
 
     for item in codex_diffs.get("diffs", []):
