@@ -3,9 +3,14 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 import os
 
+from .validators import validate_backend_imports, validate_frontend
+from .frontend_template import write_starter_frontend
 from ..models import BuildJob
-from ..llm.kimi import kimi_generate_prd_pack
-from ..llm.codex import codex_generate_diffs
+from ..llm.kimi import kimi_generate_prd_pack, retry_call
+from ..llm.codex_backend import codex_generate_backend
+from ..llm.codex_frontend import codex_generate_frontend
+from ..llm.codex_tests import codex_generate_tests
+from ..llm.codex_infra import codex_generate_infra
 from .repo_context import build_repo_context
 from .exporter import write_codex_diffs, write_prd_files
 from .file_ops import copy_tree
@@ -24,6 +29,7 @@ PACK_SCHEMA = {
     "properties": {
         "files": {
             "type": "array",
+            "minItems": 2,
             "items": {
                 "type": "object",
                 "required": ["path", "content"],
@@ -33,7 +39,19 @@ PACK_SCHEMA = {
                 },
             },
         },
-        "decisions": {"type": "object"},
+        "decisions": {
+            "type": "object",
+            "required": ["backend", "frontend", "db", "queue"],
+            "properties": {
+                "backend": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "frontend": {"type": "string"},
+                "db": {"type": "string"},
+                "queue": {"type": "string"},
+            },
+        },
     },
 }
 
@@ -55,13 +73,12 @@ def run_build_pipeline(db: Session, job_id: str, stack: str, dbtype: str, queue:
     job = db.query(BuildJob).filter(BuildJob.job_id == job_id).one()
 
     try:
-        # 1) PRD generation
         job.status = "generating_prd"
         db.commit()
         db.refresh(job)
 
         print(f"[builder] calling Kimi for {job_id}")
-        pack = kimi_generate_prd_pack(job.prompt, stack=stack, db=dbtype, queue=queue)
+        pack = retry_call(lambda: kimi_generate_prd_pack(job.prompt, stack=stack, db=dbtype, queue=queue))
         print(f"[builder] Kimi returned for {job_id}")
 
         errors = sorted(_pack_validator.iter_errors(pack), key=lambda e: e.path)
@@ -73,28 +90,59 @@ def run_build_pipeline(db: Session, job_id: str, stack: str, dbtype: str, queue:
         db.commit()
         db.refresh(job)
 
-        # 2) Code generation
-        job.status = "generating_code"
-        db.commit()
-        db.refresh(job)
-
         repo_context = build_repo_context()
 
-        print(f"[builder] calling Codex for {job_id}")
-        codex_out = codex_generate_diffs(repo_context=repo_context, prd_pack=pack)
-        print(f"[builder] Codex returned for {job_id}")
+        job.status = "generating_backend"
+        db.commit()
+        db.refresh(job)
+        print(f"[builder] calling Codex backend for {job_id}")
+        backend_out = retry_call(lambda: codex_generate_backend(repo_context=repo_context, prd_pack=pack))
+        print(f"[builder] Codex backend returned for {job_id}")
+
+        job.status = "generating_frontend"
+        db.commit()
+        db.refresh(job)
+        print(f"[builder] calling Codex frontend for {job_id}")
+        frontend_out = retry_call(lambda: codex_generate_frontend(repo_context=repo_context, prd_pack=pack))
+        print(f"[builder] Codex frontend returned for {job_id}")
+
+        job.status = "generating_tests"
+        db.commit()
+        db.refresh(job)
+        print(f"[builder] calling Codex tests for {job_id}")
+        tests_out = retry_call(lambda: codex_generate_tests(repo_context=repo_context, prd_pack=pack))
+        print(f"[builder] Codex tests returned for {job_id}")
+
+        job.status = "generating_infra"
+        db.commit()
+        db.refresh(job)
+        print(f"[builder] calling Codex infra for {job_id}")
+        infra_out = retry_call(lambda: codex_generate_infra(repo_context=repo_context, prd_pack=pack))
+        print(f"[builder] Codex infra returned for {job_id}")
+
+        merged_plan = []
+        merged_notes = []
+        merged_diffs = []
+
+        for part in [backend_out, frontend_out, tests_out, infra_out]:
+            merged_plan.extend(part.get("plan", []))
+            merged_notes.extend(part.get("notes", []))
+            merged_diffs.extend(part.get("diffs", []))
 
         job.codex_plan = {
-            "plan": codex_out.get("plan", []),
-            "notes": codex_out.get("notes", []),
+            "plan": merged_plan,
+            "notes": merged_notes,
         }
         job.codex_diffs = {
-            "diffs": codex_out.get("diffs", []),
+            "diffs": merged_diffs,
         }
         db.commit()
         db.refresh(job)
 
-        # 3) Write generated files to filesystem
+        job.status = "writing_files"
+        db.commit()
+        db.refresh(job)
+
         generated_dir = os.path.join("/app/generated", job.job_id)
         prd_written = write_prd_files(job.prd_pack, base_dir=generated_dir)
         code_written = write_codex_diffs(job.codex_diffs, base_dir=generated_dir)
@@ -103,55 +151,97 @@ def run_build_pipeline(db: Session, job_id: str, stack: str, dbtype: str, queue:
         print(f"[builder] wrote PRD files: {prd_written}")
         print(f"[builder] wrote code files: {code_written}")
 
-        # 4) Optional: copy to repo, commit, push, PR
+        frontend_package = os.path.join(generated_dir, "frontend", "web", "package.json")
+        if not os.path.exists(frontend_package):
+            print("[builder] frontend package.json missing, writing starter frontend template")
+            write_starter_frontend(generated_dir)
+
+        job.status = "validating_output"
+        db.commit()
+        db.refresh(job)
+
+        backend_dir = os.path.join(generated_dir, "backend")
+        frontend_dir = os.path.join(generated_dir, "frontend", "web")
+
+        backend_validation = validate_backend_imports(backend_dir)
+
+        if os.path.exists(frontend_dir) and os.path.exists(os.path.join(frontend_dir, "package.json")):
+            frontend_validation = validate_frontend(frontend_dir)
+        else:
+            frontend_validation = {
+                "ok": False,
+                "step": "frontend_validation_skipped",
+                "reason": "frontend package.json not found",
+            }
+
+        job.validation = {
+            "backend": backend_validation,
+            "frontend": frontend_validation,
+        }
+        job.status = "code_done"
+        job.pr_status = "not_started"
+        db.commit()
+        db.refresh(job)
+
         auto_git_pr = os.getenv("AUTO_GIT_PR", "false").lower() == "true"
 
         if auto_git_pr:
-            job.status = "creating_pr"
-            db.commit()
-            db.refresh(job)
+            try:
+                repo_path = os.environ["LOCAL_REPO_PATH"]
+                base_branch = os.getenv("GITHUB_BASE_BRANCH", "main")
+                branch_name = f"ai/{job.job_id}"
 
-            repo_path = os.environ["LOCAL_REPO_PATH"]
-            base_branch = os.getenv("GITHUB_BASE_BRANCH", "main")
-            branch_name = f"ai/{job.job_id}"
+                job.pr_status = "creating"
+                job.branch_name = branch_name
+                db.commit()
+                db.refresh(job)
 
-            print("[builder] configuring git")
-            ensure_git_identity(repo_path)
-            set_authenticated_remote(repo_path)
+                print("[builder] configuring git")
+                ensure_git_identity(repo_path)
+                set_authenticated_remote(repo_path)
 
-            print(f"[builder] checking out base branch: {base_branch}")
-            checkout_base_branch(repo_path, base_branch)
+                print(f"[builder] checking out base branch: {base_branch}")
+                checkout_base_branch(repo_path, base_branch)
 
-            print(f"[builder] creating branch: {branch_name}")
-            create_branch(repo_path, branch_name)
+                print(f"[builder] creating branch: {branch_name}")
+                create_branch(repo_path, branch_name)
 
-            print(f"[builder] copying generated files into repo: {repo_path}")
-            copy_tree(generated_dir, repo_path)
+                print(f"[builder] copying generated files into repo: {repo_path}")
+                copy_tree(generated_dir, repo_path)
 
-            print(f"[builder] committing and pushing branch: {branch_name}")
-            push_result = add_commit_push(
-                repo_path=repo_path,
-                commit_message=f"AI-generated compliance engine scaffold for job {job.job_id}",
-                branch_name=branch_name,
-)
-
-            if push_result == "no_changes":
-                print("[builder] no git changes detected; skipping PR creation")
-            else:
-                print("[builder] creating GitHub PR")
-                pr = create_github_pr(
+                print(f"[builder] committing and pushing branch: {branch_name}")
+                push_result = add_commit_push(
+                    repo_path=repo_path,
+                    commit_message=f"AI-generated compliance platform scaffold for job {job.job_id}",
                     branch_name=branch_name,
-                    title=f"AI: Compliance engine scaffold ({job.job_id})",
-                    body=(
-                        "This PR was generated automatically from the Kimi PRD pack "
-                        "and Azure Codex implementation pipeline."
-                    ),
                 )
-                print(f"[builder] PR created: {pr.get('html_url')}")
 
-        job.status = "code_done"
-        db.commit()
-        db.refresh(job)
+                if push_result == "no_changes":
+                    job.pr_status = "failed"
+                    job.error = "git/pr step failed: no changes detected for PR creation"
+                    db.commit()
+                    db.refresh(job)
+                else:
+                    pr = create_github_pr(
+                        branch_name=branch_name,
+                        title=f"AI: Compliance platform scaffold ({job.job_id})",
+                        body=(
+                            "This PR was generated automatically from the Kimi PRD pack "
+                            "and Azure Codex implementation pipeline."
+                        ),
+                    )
+                    job.pr_status = "created"
+                    job.pr_url = pr.get("html_url")
+                    db.commit()
+                    db.refresh(job)
+                    print(f"[builder] PR created: {job.pr_url}")
+
+            except Exception as git_err:
+                print(f"[builder] git/pr step failed: {git_err}")
+                job.pr_status = "failed"
+                job.error = f"git/pr step failed: {git_err}"
+                db.commit()
+                db.refresh(job)
 
         print(f"[builder] completed pipeline for {job_id}")
         return job

@@ -3,22 +3,26 @@ import subprocess
 
 
 def run_git(cmd: list[str], repo_path: str) -> str:
+    print(f"[git] running: {' '.join(cmd)} in {repo_path}")
     result = subprocess.run(
         cmd,
         cwd=repo_path,
         capture_output=True,
         text=True,
-        check=True,
     )
+    print(f"[git] finished: {' '.join(cmd)} rc={result.returncode}")
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"git command failed: {' '.join(cmd)}\n"
+            f"stdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
     return result.stdout.strip()
 
 
 def _has_origin(repo_path: str) -> bool:
-    try:
-        out = run_git(["git", "remote"], repo_path)
-        return "origin" in out.split()
-    except Exception:
-        return False
+    out = run_git(["git", "remote"], repo_path)
+    return "origin" in out.split()
 
 
 def ensure_git_identity(repo_path: str):
@@ -29,12 +33,12 @@ def ensure_git_identity(repo_path: str):
 
     try:
         run_git(["git", "config", "user.name"], repo_path)
-    except subprocess.CalledProcessError:
+    except Exception:
         run_git(["git", "config", "user.name", "AI Builder"], repo_path)
 
     try:
         run_git(["git", "config", "user.email"], repo_path)
-    except subprocess.CalledProcessError:
+    except Exception:
         run_git(["git", "config", "user.email", "ai-builder@example.com"], repo_path)
 
 
@@ -52,11 +56,16 @@ def set_authenticated_remote(repo_path: str):
 
 
 def checkout_base_branch(repo_path: str, base_branch: str):
+    run_git(["git", "fetch", "origin"], repo_path)
     run_git(["git", "checkout", base_branch], repo_path)
-    run_git(["git", "pull", "origin", base_branch], repo_path)
+    run_git(["git", "reset", "--hard", f"origin/{base_branch}"], repo_path)
 
 
 def create_branch(repo_path: str, branch_name: str):
+    try:
+        run_git(["git", "branch", "-D", branch_name], repo_path)
+    except Exception:
+        pass
     run_git(["git", "checkout", "-b", branch_name], repo_path)
 
 

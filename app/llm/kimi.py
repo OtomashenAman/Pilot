@@ -10,9 +10,21 @@ KIMI_MODEL = os.getenv("KIMI_MODEL", "kimi-k2.5")
 client = OpenAI(
     api_key=MOONSHOT_API_KEY,
     base_url=MOONSHOT_BASE_URL,
-    timeout=60.0,
+    timeout=120.0,
 )
 
+import time
+
+def retry_call(fn, retries=3, delay=3):
+    last_err = None
+    for attempt in range(retries):
+        try:
+            return fn()
+        except Exception as e:
+            last_err = e
+            if attempt < retries - 1:
+                time.sleep(delay)
+    raise last_err
 
 def extract_json_object(raw: str) -> str:
     raw = (raw or "").strip()
@@ -51,30 +63,31 @@ def parse_json_response(raw: str) -> dict:
 
 
 def kimi_generate_prd_pack(user_prompt: str, stack: str, db: str, queue: str) -> dict:
-    system = """
-You are a senior product architect.
+    system =  """
+            You are a senior product architect.
 
-Return ONLY one valid JSON object.
-Do not use markdown fences.
-Do not add explanations.
-Do not add comments.
+            Return ONLY one valid JSON object.
+            Do not use markdown fences.
+            Do not add explanations.
 
-Schema:
-{
-  "files": [
-    {"path":"docs/PRD.md","content":"..."},
-    {"path":"docs/ARCHITECTURE.md","content":"..."}
-  ],
-  "decisions": {
-    "language":"python",
-    "framework":"fastapi",
-    "db":"postgres",
-    "queue":"celery"
-  }
-}
+            Keep the response concise.
+            Do not generate more than 3 files.
 
-Keep content concise but useful.
-"""
+            Schema:
+            {
+            "files": [
+                {"path":"docs/PRD.md","content":"..."},
+                {"path":"docs/ARCHITECTURE.md","content":"..."},
+                {"path":"docs/FRONTEND_SPEC.md","content":"..."}
+            ],
+            "decisions": {
+                "backend": ["django", "fastapi"],
+                "frontend": "nextjs",
+                "db": "postgres",
+                "queue": "celery"
+            }
+            }
+            """
 
     user = {
         "request": user_prompt,
@@ -99,7 +112,7 @@ Keep content concise but useful.
             {"role": "user", "content": json.dumps(user, ensure_ascii=False)}
         ],
         temperature=1,
-        max_tokens=5000,
+        max_tokens=3500,
         response_format={"type": "json_object"},
     )
     print("[kimi] response received")
